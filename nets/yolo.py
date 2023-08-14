@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from nets.backbone import Backbone, Multi_Concat_Block, Conv, SiLU, Transition_Block, autopad
+from nets.attention import cbam_block, eca_block, se_block, CA_Block
 
 
 class SPPCSPC(nn.Module):
@@ -241,10 +242,14 @@ class YoloBody(nn.Module):
         #------------------------加强特征提取网络------------------------# 
         self.upsample   = nn.Upsample(scale_factor=2, mode="nearest")
 
+        # feat3后面添加ECA注意力机制
+        self.feat3_att      = eca_block(transition_channels * 32)
         # 20, 20, 1024 => 20, 20, 512
         self.sppcspc                = SPPCSPC(transition_channels * 32, transition_channels * 16)
         # 20, 20, 512 => 20, 20, 256 => 40, 40, 256
         self.conv_for_P5            = Conv(transition_channels * 16, transition_channels * 8)
+        # feat2后面添加ECA注意力机制
+        self.feat2_att = eca_block(transition_channels * 32)
         # 40, 40, 1024 => 40, 40, 256
         self.conv_for_feat2         = Conv(transition_channels * 32, transition_channels * 8)
         # 40, 40, 512 => 40, 40, 256
@@ -252,6 +257,8 @@ class YoloBody(nn.Module):
 
         # 40, 40, 256 => 40, 40, 128 => 80, 80, 128
         self.conv_for_P4            = Conv(transition_channels * 8, transition_channels * 4)
+        # feat1后面添加ECA注意力机制
+        self.feat1_att = eca_block(transition_channels * 16)
         # 80, 80, 512 => 80, 80, 128
         self.conv_for_feat1         = Conv(transition_channels * 16, transition_channels * 4)
         # 80, 80, 256 => 80, 80, 128
@@ -299,12 +306,16 @@ class YoloBody(nn.Module):
         feat1, feat2, feat3 = self.backbone.forward(x)
         
         #------------------------加强特征提取网络------------------------# 
+        # 为feat3添加eca注意力机制
+        feat3 = self.feat3_att(feat3)
         # 20, 20, 1024 => 20, 20, 512
         P5          = self.sppcspc(feat3)
         # 20, 20, 512 => 20, 20, 256
         P5_conv     = self.conv_for_P5(P5)
         # 20, 20, 256 => 40, 40, 256
         P5_upsample = self.upsample(P5_conv)
+        # 为feat2添加eca注意力机制
+        feat2 = self.feat2_att(feat2)
         # 40, 40, 256 cat 40, 40, 256 => 40, 40, 512
         P4          = torch.cat([self.conv_for_feat2(feat2), P5_upsample], 1)
         # 40, 40, 512 => 40, 40, 256
@@ -314,6 +325,8 @@ class YoloBody(nn.Module):
         P4_conv     = self.conv_for_P4(P4)
         # 40, 40, 128 => 80, 80, 128
         P4_upsample = self.upsample(P4_conv)
+        # 为feat1添加eca注意力机制
+        feat1 = self.feat1_att(feat1)
         # 80, 80, 128 cat 80, 80, 128 => 80, 80, 256
         P3          = torch.cat([self.conv_for_feat1(feat1), P4_upsample], 1)
         # 80, 80, 256 => 80, 80, 128
